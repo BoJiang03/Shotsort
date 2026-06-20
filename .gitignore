@@ -1,1 +1,4 @@
 /target
+
+# Local conversation logs / work snapshots — kept on disk, never published.
+/records/
