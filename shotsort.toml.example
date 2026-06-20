@@ -1,0 +1,29 @@
+# Copy to `shotsort.toml` (or pass with --config) and edit. CLI flags override
+# anything set here. Every key is optional.
+
+# In-card destination root (must be on the same card, outside DCIM).
+dest             = "/Volumes/SONY/Organized"
+
+# Which media to import: any of "raw", "jpeg", "video", or just ["all"].
+types            = ["raw", "jpeg", "video"]
+
+# Destination sub-folder and file-name templates.
+folder_template  = "{YYYY}/{YYYY}-{MM}-{DD}"
+name_template    = "{original}"
+
+# exif | mtime | exif-then-mtime
+date_source      = "exif"
+# skip | mtime | unknown-folder
+on_missing_date  = "unknown-folder"
+# rename | skip | overwrite
+on_conflict      = "rename"
+# name | hash | off
+dedup            = "name"
+# auto | size | hash | off
+verify           = "auto"
+
+clean_empty_dirs = false
+jobs             = 1
+
+# Fixed offset for UTC-sourced video timestamps, e.g. "+08:00".
+# tz_offset      = "+08:00"
