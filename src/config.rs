@@ -9,7 +9,7 @@ use chrono::FixedOffset;
 use serde::Deserialize;
 
 use crate::cli::{
-    Cli, DateSourceArg, DedupArg, OnConflictArg, OnMissingDateArg, TypeSel, VerifyArg,
+    Cli, DateSourceArg, DedupArg, ModeArg, OnConflictArg, OnMissingDateArg, TypeSel, VerifyArg,
 };
 
 /// Raw shape of the optional `shotsort.toml` file. Every field is optional so
@@ -18,6 +18,8 @@ use crate::cli::{
 #[serde(deny_unknown_fields)]
 pub struct FileConfig {
     pub dest: Option<PathBuf>,
+    pub mode: Option<String>,
+    pub link: Option<bool>,
     pub types: Option<Vec<String>>,
     pub ext: Option<Vec<String>>,
     pub folder_template: Option<String>,
@@ -50,6 +52,8 @@ pub struct RunConfig {
     pub dest: PathBuf,
     pub dry_run: bool,
     pub copy: bool,
+    pub link: bool,
+    pub mode: ModeArg,
     /// `None` means "every recognized media kind".
     pub kinds: Option<Vec<TypeSel>>,
     pub ext_whitelist: Option<Vec<String>>,
@@ -75,6 +79,14 @@ pub const DEFAULT_NAME_TEMPLATE: &str = "{original}";
 pub const JOURNAL_BASENAME: &str = ".shotsort-journal.jsonl";
 
 impl RunConfig {
+    /// True when the effective action keeps the source in place: the explicit
+    /// `--copy`/`--link` flags, or `--mode video` (which always copies/links
+    /// clips out of the camera-managed dirs without ever deleting an original).
+    /// This is the single source of truth for move-vs-keep-source branching.
+    pub fn is_copy(&self) -> bool {
+        self.copy || self.link || self.mode == ModeArg::Video
+    }
+
     /// Build the resolved config from parsed CLI args + optional config file.
     pub fn resolve(cli: &Cli) -> Result<RunConfig> {
         // Load config file: an explicit --config must exist; the default path
@@ -101,6 +113,13 @@ impl RunConfig {
             .clone()
             .or(file_cfg.dest.clone())
             .context("missing --dest (in-card destination root)")?;
+
+        let mode = cli
+            .mode
+            .or_else(|| file_cfg.mode.as_deref().and_then(parse_mode))
+            .unwrap_or_default();
+
+        let link = cli.link || file_cfg.link.unwrap_or(false);
 
         let kinds = resolve_kinds(cli, &file_cfg)?;
         let ext_whitelist = cli.ext.clone().or(file_cfg.ext.clone()).map(|v| {
@@ -171,6 +190,8 @@ impl RunConfig {
             dest,
             dry_run: cli.dry_run,
             copy: cli.copy,
+            link,
+            mode,
             kinds,
             ext_whitelist,
             folder_template,
@@ -219,6 +240,14 @@ fn parse_type(s: &str) -> Result<TypeSel> {
         "all" => TypeSel::All,
         other => anyhow::bail!("unknown type in config: {other}"),
     })
+}
+
+fn parse_mode(s: &str) -> Option<ModeArg> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "photo" => Some(ModeArg::Photo),
+        "video" => Some(ModeArg::Video),
+        _ => None,
+    }
 }
 
 fn parse_date_source(s: &str) -> Option<DateSourceArg> {

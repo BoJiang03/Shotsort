@@ -168,6 +168,109 @@ fn missing_date_goes_to_nodate() {
 }
 
 #[test]
+fn video_mode_copies_clips_and_keeps_originals() {
+    let card = TempCard::new("video");
+    // Sony XAVC clips live under a managed dir that photo mode never touches.
+    let clip = card.path().join("PRIVATE/M4ROOT/CLIP");
+    let dest = card.path().join("Organized");
+
+    write(&clip.join("C0005.MP4"), "clip-five", "202606250839.00");
+    write(&clip.join("C0006.MP4"), "clip-six", "202606260123.00");
+    // A proxy under SUB and a thumbnail under THMBNL must NOT be copied out.
+    write(
+        &card.path().join("PRIVATE/M4ROOT/SUB/C0005S01.MP4"),
+        "proxy",
+        "202606250839.00",
+    );
+    write(
+        &card.path().join("PRIVATE/M4ROOT/THMBNL/C0005T01.JPG"),
+        "thumb",
+        "202606250839.00",
+    );
+
+    // Point SOURCE at the card root in video mode.
+    let status = bin()
+        .arg(card.path())
+        .args(["--dest"])
+        .arg(&dest)
+        .args(["--mode", "video", "--date-source", "mtime", "--yes"])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    // Masters copied into date folders.
+    assert!(dest.join("2026/2026-06-25/C0005.MP4").exists());
+    assert!(dest.join("2026/2026-06-26/C0006.MP4").exists());
+    // Proxy + thumbnail were skipped.
+    assert!(!dest.join("2026/2026-06-25/C0005S01.MP4").exists());
+    assert!(!dest.join("2026/2026-06-25/C0005T01.JPG").exists());
+    // Originals are still on the card (copy, not move).
+    assert!(clip.join("C0005.MP4").exists());
+    assert!(clip.join("C0006.MP4").exists());
+
+    // Journal records two copies.
+    let journal = dest.join(".shotsort-journal.jsonl");
+    let lines = fs::read_to_string(&journal).unwrap();
+    assert_eq!(lines.lines().filter(|l| l.contains("\"copy\"")).count(), 2);
+
+    // Undo deletes the copies but leaves the originals intact.
+    let undo = bin()
+        .args(["undo", "--journal"])
+        .arg(&journal)
+        .arg("--yes")
+        .status()
+        .unwrap();
+    assert!(undo.success());
+    assert!(!dest.join("2026/2026-06-25/C0005.MP4").exists());
+    assert!(!dest.join("2026/2026-06-26/C0006.MP4").exists());
+    assert!(clip.join("C0005.MP4").exists());
+    assert!(clip.join("C0006.MP4").exists());
+}
+
+#[test]
+fn video_link_mode_makes_relative_symlinks() {
+    let card = TempCard::new("vlink");
+    let clip = card.path().join("PRIVATE/M4ROOT/CLIP");
+    let dest = card.path().join("Organized");
+
+    write(&clip.join("C0005.MP4"), "clip-five", "202606250839.00");
+
+    let status = bin()
+        .arg(card.path())
+        .args(["--dest"])
+        .arg(&dest)
+        .args(["--mode", "video", "--link", "--date-source", "mtime", "--yes"])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let link = dest.join("2026/2026-06-25/C0005.MP4");
+    // It's a symlink (not a copy)...
+    let meta = fs::symlink_metadata(&link).unwrap();
+    assert!(meta.file_type().is_symlink(), "expected a symlink");
+    // ...with a RELATIVE target (survives the card being renamed)...
+    let target = fs::read_link(&link).unwrap();
+    assert!(target.is_relative(), "link target must be relative: {target:?}");
+    // ...that resolves to the original clip's bytes.
+    assert_eq!(fs::read(&link).unwrap(), b"clip-five");
+    // Original untouched.
+    assert!(clip.join("C0005.MP4").exists());
+
+    // Undo removes the link; the original stays.
+    let journal = dest.join(".shotsort-journal.jsonl");
+    assert!(fs::read_to_string(&journal).unwrap().contains("\"link\""));
+    let undo = bin()
+        .args(["undo", "--journal"])
+        .arg(&journal)
+        .arg("--yes")
+        .status()
+        .unwrap();
+    assert!(undo.success());
+    assert!(fs::symlink_metadata(&link).is_err(), "link should be gone");
+    assert!(clip.join("C0005.MP4").exists());
+}
+
+#[test]
 fn dry_run_moves_nothing() {
     let card = TempCard::new("dry");
     let dcim = card.path().join("DCIM");

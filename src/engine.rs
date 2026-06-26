@@ -5,7 +5,7 @@
 
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
@@ -41,9 +41,59 @@ pub fn perform(src: &Path, dst: &Path, action: Action, verify: VerifyArg) -> Res
                 crossed_fs: false,
             })
         }
+        Action::Link => {
+            make_relative_symlink(src, dst)?;
+            Ok(Outcome {
+                bytes: size,
+                crossed_fs: false,
+            })
+        }
         Action::Move | Action::Overwrite => move_file(src, dst, verify, size),
         other => bail!("engine cannot perform action {other:?}"),
     }
+}
+
+/// Create a *relative* symlink at `dst` pointing to `src`. The target is
+/// computed relative to the link's own directory so it survives the card being
+/// renamed or remounted at a different path — the one failure mode that matters
+/// most for a volume the user renames often.
+fn make_relative_symlink(src: &Path, dst: &Path) -> Result<()> {
+    let link_dir = dst.parent().unwrap_or_else(|| Path::new("."));
+    let target = relative_path(link_dir, src);
+    symlink_impl(&target, dst)
+        .with_context(|| format!("symlinking {} -> {}", dst.display(), target.display()))?;
+    Ok(())
+}
+
+/// Relative path from directory `from_dir` to file `to`; both absolute &
+/// normalized. E.g. (`/v/SONY/Organized/2026/2026-06-25`,
+/// `/v/SONY/PRIVATE/M4ROOT/CLIP/C0005.MP4`) →
+/// `../../../PRIVATE/M4ROOT/CLIP/C0005.MP4`.
+fn relative_path(from_dir: &Path, to: &Path) -> PathBuf {
+    let from: Vec<_> = from_dir.components().collect();
+    let to_c: Vec<_> = to.components().collect();
+    let mut i = 0;
+    while i < from.len() && i < to_c.len() && from[i] == to_c[i] {
+        i += 1;
+    }
+    let mut rel = PathBuf::new();
+    for _ in i..from.len() {
+        rel.push("..");
+    }
+    for c in &to_c[i..] {
+        rel.push(c.as_os_str());
+    }
+    rel
+}
+
+#[cfg(unix)]
+fn symlink_impl(target: &Path, link: &Path) -> io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(not(unix))]
+fn symlink_impl(target: &Path, link: &Path) -> io::Result<()> {
+    std::os::windows::fs::symlink_file(target, link)
 }
 
 fn move_file(src: &Path, dst: &Path, verify: VerifyArg, size: u64) -> Result<Outcome> {
@@ -173,4 +223,26 @@ pub fn same_filesystem(src: &Path, dst_dir: &Path) -> io::Result<bool> {
 pub fn same_filesystem(_src: &Path, _dst_dir: &Path) -> io::Result<bool> {
     // Other platforms fall back to trying rename and catching EXDEV.
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn relative_path_climbs_then_descends() {
+        let from = Path::new("/v/SONY/Organized/2026/2026-06-25");
+        let to = Path::new("/v/SONY/PRIVATE/M4ROOT/CLIP/C0005.MP4");
+        assert_eq!(
+            relative_path(from, to),
+            PathBuf::from("../../../PRIVATE/M4ROOT/CLIP/C0005.MP4")
+        );
+    }
+
+    #[test]
+    fn relative_path_same_dir() {
+        let from = Path::new("/v/SONY/Organized");
+        let to = Path::new("/v/SONY/Organized/C0005.MP4");
+        assert_eq!(relative_path(from, to), PathBuf::from("C0005.MP4"));
+    }
 }

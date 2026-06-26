@@ -11,12 +11,22 @@ crate/binary name is `shotsort`. The default action is a destructive MOVE on
 single-copy, fragile media — correctness and the safety invariant below matter
 more than features.
 
+Two modes (`--mode`): **`photo`** (default) MOVES stills/clips out of `DCIM`;
+**`video`** COPIES camcorder clips (Sony XAVC `M4ROOT/CLIP`, AVCHD `STREAM`) out
+of the camera-managed dirs *without ever deleting an original* — point SOURCE at
+the **card root**, not `DCIM`. `RunConfig::is_copy()` (`--copy` OR `--link` OR
+video mode) is the single source of truth for "keep the source"; use it, not the
+raw `cfg.copy` flag, for any move-vs-keep branching. `--link` swaps the
+copy/move for a **relative** symlink (`Action::Link`, `engine::relative_path`) —
+a no-duplication, Mac-only browsable view; the relative target is what survives
+the card being renamed.
+
 ## Commands
 
 ```bash
 cargo build                 # debug build -> target/debug/shotsort
 cargo build --release       # release (lto+strip) -> target/release/shotsort
-cargo test                  # 11 unit (in-module) + 4 integration (tests/cli.rs)
+cargo test                  # 15 unit (in-module) + 6 integration (tests/cli.rs)
 cargo test --test cli       # integration tests only
 cargo test <name>           # single test, e.g. cargo test missing_date_goes_to_nodate
 cargo clippy --all-targets -- -D warnings   # must stay warning-clean
@@ -52,8 +62,11 @@ The pipeline is `scan → plan → execute`, with one resolved config threaded t
    the **current working directory** (`./shotsort.toml`), else via `--config`.
 
 2. **`scan.rs`** — `walkdir` over the source. `filter_entry` excludes the entire
-   `--dest` subtree (anti-recursion: never re-scan moved files) and any
-   camera-managed dir. Returns all recognized media + `.xmp` sidecars.
+   `--dest` subtree (anti-recursion: never re-scan moved files) and hidden/system
+   dirs. In **photo** mode it skips every camera-managed dir and returns all
+   recognized media + `.xmp` sidecars; in **video** mode it instead descends
+   *into* the managed video containers but skips the aux trees
+   (`filetype::VIDEO_AUX_DIRS`) and returns video files only.
 
 3. **`plan.rs`** — the brain. Multi-pass, pure except for reading files for
    dates/hashes:
@@ -90,8 +103,13 @@ managed-dir list), `template.rs` (folder/name token rendering), `datesrc.rs`
   the volume itself. `guard.rs` computes the common ancestor of source and dest
   and only checks components *below* it. Keep this when editing guards.
 - **Camera-managed dirs** (`PRIVATE`, `MP_ROOT`, `M4ROOT`, `AVF_INFO`, `MISC`,
-  `SONY`) and `DCIM` are never scanned, written into, or cleaned. The list lives
-  in `filetype.rs::ADMIN_DIRS`.
+  `SONY`) and `DCIM` are never scanned, written into, or cleaned in photo mode.
+  The list lives in `filetype.rs::ADMIN_DIRS`. **Video mode is the one exception
+  to "never scan managed dirs"**: it reads clips out of `M4ROOT/CLIP` etc., but
+  still only ever *copies* (never moves/deletes/cleans them), so the camera's
+  database stays intact. It also relaxes the `validate_dest` "dest inside source"
+  guard (video SOURCE is the card root, so the dest naturally sits below it; the
+  scan already excludes the dest subtree).
 - **Dates are local wall-clock.** EXIF `DateTimeOriginal` is used as-is (no UTC
   shifting, so the day never moves). Video `mvhd` time is UTC-since-1904 and is
   converted to local (or a fixed `--tz-offset`); `datesrc.rs` has a hand-rolled

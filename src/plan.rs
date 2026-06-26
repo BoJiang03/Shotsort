@@ -323,7 +323,13 @@ fn resolve_target(
     candidate: PathBuf,
     claimed: &mut HashSet<String>,
 ) -> PlanItem {
-    let move_action = if cfg.copy { Action::Copy } else { Action::Move };
+    let move_action = if cfg.link {
+        Action::Link
+    } else if cfg.is_copy() {
+        Action::Copy
+    } else {
+        Action::Move
+    };
 
     // Defensive: the candidate is built from dest + sanitized components, so it
     // must stay under dest. If it somehow does not, skip rather than escape.

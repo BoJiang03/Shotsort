@@ -4,6 +4,15 @@
 # In-card destination root (must be on the same card, outside DCIM).
 dest             = "/Volumes/SONY/Organized"
 
+# photo (default) MOVES stills/clips out of DCIM. video COPIES camera video
+# clips (Sony XAVC M4ROOT, AVCHD) out of the managed dirs, keeping originals;
+# in video mode point SOURCE at the card root, not DCIM.
+# mode           = "photo"
+
+# With link = true the destination entries are relative symlinks into the source
+# instead of byte copies (no data duplicated). Mac-only date view; see README.
+# link           = false
+
 # Which media to import: any of "raw", "jpeg", "video", or just ["all"].
 types            = ["raw", "jpeg", "video"]
 

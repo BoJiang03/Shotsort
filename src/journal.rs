@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 /// One committed file operation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JournalEntry {
-    pub op: String, // "move" | "copy" | "overwrite" | "undo-move"
+    pub op: String, // "move" | "copy" | "overwrite" | "undo-move" | "undo-copy"
     pub src: String,
     pub dst: String,
     pub ts: String,

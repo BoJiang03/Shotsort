@@ -21,7 +21,10 @@ pub fn run(journal_path: &Path, yes: bool, quiet: bool) -> Result<UndoSummary> {
     let entries = journal::read_all(journal_path)
         .with_context(|| format!("reading journal {}", journal_path.display()))?;
 
-    let movable: Vec<&JournalEntry> = entries.iter().filter(|e| e.op != "undo-move").collect();
+    let movable: Vec<&JournalEntry> = entries
+        .iter()
+        .filter(|e| matches!(e.op.as_str(), "move" | "overwrite" | "copy" | "link"))
+        .collect();
 
     if movable.is_empty() {
         println!(
@@ -56,6 +59,42 @@ pub fn run(journal_path: &Path, yes: bool, quiet: bool) -> Result<UndoSummary> {
     for entry in movable.iter().rev() {
         let dst = Path::new(&entry.dst); // current location
         let src = Path::new(&entry.src); // original location
+
+        // Undo of a copy/link: the original at `src` is authoritative, so we
+        // just remove what we wrote at `dst`. For a copy, never delete it if the
+        // original has gone missing — the copy may be the only remaining data. A
+        // symlink holds no data, so it is always safe to remove (use
+        // `symlink_metadata` so a *dead* link is still detected and cleared).
+        if entry.op == "copy" || entry.op == "link" {
+            if dst.symlink_metadata().is_err() {
+                skipped += 1;
+                continue;
+            }
+            if entry.op == "copy" && !src.exists() {
+                skipped += 1;
+                if !quiet {
+                    eprintln!("skip: original gone, keeping copy {}", entry.dst);
+                }
+                continue;
+            }
+            match fs::remove_file(dst) {
+                Ok(()) => {
+                    restored += 1;
+                    let _ = reverse.append(&JournalEntry {
+                        op: format!("undo-{}", entry.op),
+                        src: entry.dst.clone(),
+                        dst: entry.src.clone(),
+                        ts: Utc::now().to_rfc3339(),
+                        bytes: entry.bytes,
+                    });
+                }
+                Err(e) => {
+                    errors += 1;
+                    eprintln!("error: removing {} {}: {e}", entry.op, entry.dst);
+                }
+            }
+            continue;
+        }
 
         if !dst.exists() {
             skipped += 1;

@@ -77,12 +77,54 @@ shotsort undo --journal /Volumes/SONY/Organized/.shotsort-journal.jsonl
 Before doing anything destructive shotsort prints a plan summary and asks for
 confirmation (skip it with `--yes`).
 
+## Two modes: `photo` and `video`
+
+`--mode photo` (the default) is everything above: it scans `DCIM/` and **moves**
+stills and clips into date folders.
+
+`--mode video` handles the videos that photo mode deliberately leaves alone.
+Camcorder-style footage (Sony XAVC S in `PRIVATE/M4ROOT/CLIP`, AVCHD in
+`PRIVATE/AVCHD/.../STREAM`) is **not** a loose file in `DCIM` — each clip is tied
+to a camera database, thumbnails, and sidecars. Moving the bare `.MP4` out would
+break in-camera playback. So video mode **copies** the master clips out (never
+moves, never deletes the originals), into the same date-folder layout:
+
+```bash
+# Point SOURCE at the CARD ROOT (not DCIM) and copy clips into date folders.
+shotsort /Volumes/SONY --dest /Volumes/SONY/Videos --mode video --dry-run
+shotsort /Volumes/SONY --dest /Volumes/SONY/Videos --mode video
+```
+
+Proxies, thumbnails, audio and metadata trees (`SUB`, `THMBNL`, `WAV`,
+`GENERAL`, `DATABASE`, …) are skipped — only the full-resolution masters are
+copied. `undo` on a video run deletes the copies and leaves every original in
+place.
+
+### `--link`: a date view without duplicating the data
+
+Add `--link` to make the destination entries **relative symlinks** into the
+source instead of byte-for-byte copies — a browsable date view that costs no
+extra space:
+
+```bash
+shotsort /Volumes/SONY --dest /Volumes/SONY/Videos --mode video --link
+```
+
+The links are *relative*, so they keep working when the card is renamed or
+remounted. Caveats worth knowing: they are a **macOS-on-exFAT** feature —
+Windows, the camera, and other devices see them as broken stubs; and copying the
+view elsewhere with a normal tool copies the *links*, not the videos. Use it for
+on-Mac browsing, not as a backup. `undo` removes the links and never touches an
+original.
+
 ## Options
 
 | Option | Default | Meaning |
 |---|---|---|
 | `--dry-run` | off | Compute and print the plan; touch nothing |
+| `--mode <m>` | `photo` | `photo` MOVES from `DCIM`; `video` COPIES camera clips out of managed dirs (point SOURCE at the card root) |
 | `--copy` | off | Copy instead of move (keeps the source) |
+| `--link` | off | Write relative symlinks instead of copying bytes (Mac-only date view; keeps the source) |
 | `--types <list>` | `all` | `raw,jpeg,video` (comma-separated) or `all` |
 | `--ext <list>` | — | Explicit extension whitelist; overrides `--types` |
 | `--folder-template <TPL>` | `{YYYY}/{YYYY}-{MM}-{DD}` | Destination sub-folder template |

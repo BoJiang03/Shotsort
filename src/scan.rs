@@ -5,13 +5,19 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use walkdir::{DirEntry, WalkDir};
 
-use crate::filetype::{classify, is_admin_dir};
+use crate::cli::ModeArg;
+use crate::filetype::{classify, is_admin_dir, is_video_aux_dir};
 use crate::guard::{is_within, normalize};
-use crate::types::MediaFile;
+use crate::types::{FileKind, MediaFile};
 
-/// Walk `source`, collecting all recognized media + sidecar files while
-/// excluding the `dest` subtree and any camera-managed directory.
-pub fn scan(source: &Path, dest: &Path) -> Result<Vec<MediaFile>> {
+/// Walk `source`, collecting recognized media + sidecar files while excluding
+/// the `dest` subtree.
+///
+/// In [`ModeArg::Photo`] (default) every camera-managed dir is skipped and all
+/// recognized kinds are collected. In [`ModeArg::Video`] we descend *into* the
+/// managed video containers (to reach `M4ROOT/CLIP`, AVCHD `STREAM`, …) but skip
+/// the proxy/thumbnail/metadata aux dirs, and collect video files only.
+pub fn scan(source: &Path, dest: &Path, mode: ModeArg) -> Result<Vec<MediaFile>> {
     let source = normalize(source);
     let dest = normalize(dest);
 
@@ -28,10 +34,19 @@ pub fn scan(source: &Path, dest: &Path) -> Result<Vec<MediaFile>> {
             if is_within(&p, &dest) {
                 return false;
             }
-            if let Some(name) = e.file_name().to_str()
-                && is_admin_dir(name)
-            {
-                return false;
+            if let Some(name) = e.file_name().to_str() {
+                // Hidden/system dirs (.Trashes, .Spotlight-V100, …) never hold
+                // camera media and may hold trashed clips — never descend.
+                if name.starts_with('.') {
+                    return false;
+                }
+                let skip = match mode {
+                    ModeArg::Photo => is_admin_dir(name),
+                    ModeArg::Video => is_video_aux_dir(name),
+                };
+                if skip {
+                    return false;
+                }
             }
         }
         true
@@ -52,6 +67,13 @@ pub fn scan(source: &Path, dest: &Path) -> Result<Vec<MediaFile>> {
         }
 
         let path = entry.path();
+        // Skip dotfiles: macOS AppleDouble companions (`._IMG.JPG`) on exFAT and
+        // junk like `.DS_Store` would otherwise be misclassified as real media.
+        if let Some(name) = path.file_name().and_then(|n| n.to_str())
+            && name.starts_with('.')
+        {
+            continue;
+        }
         let ext = match path.extension().and_then(|e| e.to_str()) {
             Some(e) => e.to_string(),
             None => continue,
@@ -60,6 +82,12 @@ pub fn scan(source: &Path, dest: &Path) -> Result<Vec<MediaFile>> {
             Some(k) => k,
             None => continue,
         };
+
+        // Video mode organizes clips only — ignore stills/thumbnails found in
+        // the managed trees (e.g. THMBNL JPEGs slip past the dir filter).
+        if mode == ModeArg::Video && kind != FileKind::Video {
+            continue;
+        }
 
         let stem = path
             .file_stem()

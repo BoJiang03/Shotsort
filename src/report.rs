@@ -33,7 +33,7 @@ pub fn summarize(items: &[PlanItem]) -> PlanStats {
     let mut s = PlanStats::default();
     for item in items {
         match item.action {
-            Action::Move | Action::Copy => {
+            Action::Move | Action::Copy | Action::Link => {
                 s.to_move += 1;
                 s.move_bytes += item.size;
                 *s.by_folder.entry(item.rel_folder.clone()).or_default() += 1;
@@ -64,7 +64,20 @@ pub fn summarize(items: &[PlanItem]) -> PlanStats {
 
 /// Print the plan preview / confirmation summary.
 pub fn print_preview(cfg: &RunConfig, stats: &PlanStats, dry_run: bool) {
-    let verb = if cfg.copy { "copy" } else { "move" };
+    let verb = if cfg.link {
+        "link"
+    } else if cfg.is_copy() {
+        "copy"
+    } else {
+        "move"
+    };
+    let mode_note = if cfg.link {
+        "relative symlinks, originals kept"
+    } else if cfg.is_copy() {
+        "copy out, originals kept"
+    } else {
+        "same card → atomic move"
+    };
     let header = if dry_run {
         "Plan preview (dry-run, nothing moved)"
     } else {
@@ -72,7 +85,7 @@ pub fn print_preview(cfg: &RunConfig, stats: &PlanStats, dry_run: bool) {
     };
     println!("\n{header}");
     println!(
-        "  source: {}    dest: {} (same card → atomic {verb})",
+        "  source: {}    dest: {} ({mode_note})",
         cfg.source.display(),
         cfg.dest.display()
     );
@@ -119,7 +132,17 @@ pub fn print_preview(cfg: &RunConfig, stats: &PlanStats, dry_run: bool) {
         println!("  {}", flags.join("   "));
     }
 
-    if !cfg.copy {
+    if cfg.link {
+        println!(
+            "  ℹ LINK: relative symlinks into the source; no data copied. Mac-only — the links\n    \
+             are not understood on Windows/the camera, and a plain copy of this folder copies\n    \
+             the links, not the videos. Originals are never touched."
+        );
+    } else if cfg.is_copy() {
+        println!(
+            "  ℹ COPY: originals stay in place (camera playback unaffected); only copies are written to the destination."
+        );
+    } else {
         println!(
             "  ⚠ this is a MOVE; afterwards these files leave DCIM and camera playback won't see them."
         );

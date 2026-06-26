@@ -73,7 +73,7 @@ fn organize(cli: Cli) -> Result<i32> {
     if !meta.is_dir() {
         bail!("SOURCE is not a directory: {}", source.display());
     }
-    guard::validate_dest(&source, &dest)?;
+    guard::validate_dest(&source, &dest, cfg.mode)?;
 
     // Build the effective config with normalized paths.
     let cfg = RunConfig {
@@ -92,7 +92,7 @@ fn organize(cli: Cli) -> Result<i32> {
     if !cfg.quiet {
         println!("Scanning {} ...", source.display());
     }
-    let files = scan::scan(&source, &dest)?;
+    let files = scan::scan(&source, &dest, cfg.mode)?;
     if files.is_empty() {
         println!("No recognized media found under {}.", source.display());
         return Ok(0);
@@ -160,7 +160,13 @@ fn execute(cfg: &RunConfig, items: &[PlanItem], stats: &PlanStats) -> Result<Fin
     }
 
     let mut final_stats = FinalStats {
-        action_verb: if cfg.copy { "copied" } else { "moved" },
+        action_verb: if cfg.link {
+            "linked"
+        } else if cfg.is_copy() {
+            "copied"
+        } else {
+            "moved"
+        },
         ..Default::default()
     };
 
@@ -201,6 +207,7 @@ fn execute(cfg: &RunConfig, items: &[PlanItem], stats: &PlanStats) -> Result<Fin
                 }
                 let op = match item.action {
                     Action::Copy => "copy",
+                    Action::Link => "link",
                     Action::Overwrite => "overwrite",
                     _ => "move",
                 };
@@ -221,7 +228,7 @@ fn execute(cfg: &RunConfig, items: &[PlanItem], stats: &PlanStats) -> Result<Fin
     }
     progress.finish_and_clear();
 
-    if cfg.clean_empty_dirs && !cfg.copy {
+    if cfg.clean_empty_dirs && !cfg.is_copy() {
         let removed = clean_empty_dirs(&cfg.source)?;
         if removed > 0 && !cfg.quiet {
             println!("  removed {removed} empty source folder(s)");

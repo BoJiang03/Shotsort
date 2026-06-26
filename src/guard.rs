@@ -4,6 +4,7 @@ use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Result, bail};
 
+use crate::cli::ModeArg;
 use crate::filetype::is_admin_dir;
 
 /// Lexically absolutize and normalize a path (resolves `.`/`..` without
@@ -80,11 +81,15 @@ fn has_forbidden_below(base: &Path, path: &Path) -> bool {
 
 /// Validate the source/destination relationship before doing anything.
 /// `source` and `dest` should already be normalized & absolute.
-pub fn validate_dest(source: &Path, dest: &Path) -> Result<()> {
+pub fn validate_dest(source: &Path, dest: &Path, mode: ModeArg) -> Result<()> {
     if dest == source {
         bail!("--dest must differ from SOURCE ({})", source.display());
     }
-    if is_within(dest, source) {
+    // Photo mode forbids a dest *inside* source (it would re-scan moved files).
+    // Video mode intentionally scans from the card root, so the dest naturally
+    // lives below it; the scan already excludes the dest subtree, so this is
+    // safe and the check is relaxed.
+    if mode == ModeArg::Photo && is_within(dest, source) {
         bail!(
             "--dest ({}) is inside SOURCE ({}); that would re-scan moved files",
             dest.display(),
@@ -132,27 +137,41 @@ mod tests {
     fn rejects_dest_in_dcim() {
         let src = Path::new("/Volumes/SONY/DCIM");
         let dst = Path::new("/Volumes/SONY/DCIM/Organized");
-        assert!(validate_dest(src, dst).is_err());
+        assert!(validate_dest(src, dst, ModeArg::Photo).is_err());
     }
 
     #[test]
     fn rejects_dest_equals_source() {
         let p = Path::new("/Volumes/SONY/DCIM");
-        assert!(validate_dest(p, p).is_err());
+        assert!(validate_dest(p, p, ModeArg::Photo).is_err());
     }
 
     #[test]
     fn rejects_admin_dest() {
         let src = Path::new("/Volumes/SONY/DCIM");
         let dst = Path::new("/Volumes/SONY/PRIVATE/x");
-        assert!(validate_dest(src, dst).is_err());
+        assert!(validate_dest(src, dst, ModeArg::Photo).is_err());
     }
 
     #[test]
     fn accepts_sibling_dest() {
         let src = Path::new("/Volumes/SONY/DCIM");
         let dst = Path::new("/Volumes/SONY/Organized");
-        assert!(validate_dest(src, dst).is_ok());
+        assert!(validate_dest(src, dst, ModeArg::Photo).is_ok());
+    }
+
+    #[test]
+    fn video_mode_allows_dest_below_card_root_source() {
+        // Video mode scans from the card root, so a dest folder *inside* the
+        // source is expected and allowed (the scan excludes the dest subtree).
+        let src = Path::new("/Volumes/SONY");
+        let dst = Path::new("/Volumes/SONY/Organized");
+        assert!(validate_dest(src, dst, ModeArg::Video).is_ok());
+        // Photo mode still rejects the same pair.
+        assert!(validate_dest(src, dst, ModeArg::Photo).is_err());
+        // But video mode must still refuse a dest inside a managed dir.
+        let bad = Path::new("/Volumes/SONY/PRIVATE/Organized");
+        assert!(validate_dest(src, bad, ModeArg::Video).is_err());
     }
 
     #[test]

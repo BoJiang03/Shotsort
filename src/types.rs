@@ -71,6 +71,8 @@ pub enum Action {
     Move,
     /// Copy, keeping the source.
     Copy,
+    /// Create a relative symlink at the target, keeping the source.
+    Link,
     /// Move/copy that overwrites an existing target.
     Overwrite,
     /// Skipped: name/content already present at target.
@@ -93,6 +95,7 @@ impl Action {
         match self {
             Action::Move => "moved",
             Action::Copy => "copied",
+            Action::Link => "linked",
             Action::Overwrite => "overwritten",
             Action::SkipDuplicate => "skipped-duplicate",
             Action::SkipConflict => "skipped-conflict",

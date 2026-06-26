@@ -26,6 +26,19 @@ pub struct Cli {
     #[arg(long)]
     pub copy: bool,
 
+    /// Organize by creating a *relative* symlink at the destination instead of
+    /// moving/copying bytes (keeps the source; no data duplicated). Intended for
+    /// `--mode video`, e.g. a browsable date view of camera clips on the card.
+    #[arg(long)]
+    pub link: bool,
+
+    /// Organize mode. `photo` (default) MOVES stills/clips out of `DCIM`.
+    /// `video` COPIES camera video clips (Sony XAVC `M4ROOT`, AVCHD) out of the
+    /// camera-managed dirs, keeping the originals so the camera can still play
+    /// them. In `video` mode point SOURCE at the card root, not `DCIM`.
+    #[arg(long, value_enum, value_name = "mode")]
+    pub mode: Option<ModeArg>,
+
     /// Import categories: any of raw,jpeg,video or `all`.
     #[arg(long, value_delimiter = ',', value_name = "list")]
     pub types: Option<Vec<TypeSel>>,
@@ -113,6 +126,15 @@ pub enum Command {
         #[arg(short, long)]
         yes: bool,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+pub enum ModeArg {
+    /// Move stills/clips out of `DCIM` (default).
+    #[default]
+    Photo,
+    /// Copy camera video clips out of managed dirs, keeping originals.
+    Video,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
