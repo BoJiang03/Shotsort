@@ -126,6 +126,60 @@ pub enum Command {
         #[arg(short, long)]
         yes: bool,
     },
+
+    /// Match a PixCake project's kept photos to their RAW files and gather them.
+    ///
+    /// PixCake tethered shooting stores low-res preview JPEGs; the RAWs stay on
+    /// the card. This reads the project's own database to learn which previews
+    /// were kept (not moved to the project recycle bin), then finds each keeper's
+    /// RAW by an exact capture-time match (`DateTimeOriginal` + `SubSecTimeOriginal`,
+    /// to the millisecond — robust to 30fps bursts) and copies those RAWs to `--out`.
+    Match {
+        /// PixCake project name exactly as shown in the app, e.g. `My Shoot`.
+        #[arg(long, value_name = "NAME")]
+        project: String,
+
+        /// Root folder holding the organized RAWs, scanned recursively across all
+        /// date folders, e.g. `/Volumes/Picture/Organized`.
+        #[arg(long, value_name = "DIR")]
+        raw_src: PathBuf,
+
+        /// Output folder to gather the matched RAWs into.
+        #[arg(long, value_name = "DIR")]
+        out: PathBuf,
+
+        /// PixCake data directory (default:
+        /// `~/Library/Application Support/PixCake-qt_pro`).
+        #[arg(long, value_name = "DIR")]
+        pixcake_dir: Option<PathBuf>,
+
+        /// How to gather matched RAWs. `copy` (default) keeps the archive intact;
+        /// `move` pulls them out (leaving gaps); `link` makes relative symlinks.
+        #[arg(long, value_enum, default_value = "copy", value_name = "act")]
+        action: MatchAction,
+
+        /// Compute and print the matches without gathering anything.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Journal path (default: `<out>/.shotsort-journal.jsonl`), for `undo`.
+        #[arg(long, value_name = "FILE")]
+        journal: Option<PathBuf>,
+
+        /// Skip the interactive confirmation.
+        #[arg(short, long)]
+        yes: bool,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum MatchAction {
+    /// Copy matched RAWs to the output (keeps the archived originals).
+    Copy,
+    /// Move matched RAWs to the output (removes them from the archive).
+    Move,
+    /// Create relative symlinks at the output (no data copied).
+    Link,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]

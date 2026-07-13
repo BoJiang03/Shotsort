@@ -117,6 +117,32 @@ view elsewhere with a normal tool copies the *links*, not the videos. Use it for
 on-Mac browsing, not as a backup. `undo` removes the links and never touches an
 original.
 
+## `match`: gather the RAWs behind a PixCake selection
+
+If you shoot **tethered into [PixCake](https://www.pixcake.cn/) (像素蛋糕)** —
+low-res preview JPEGs stream to the Mac while the camera saves **RAW-only** to the
+card — `shotsort match` closes the loop after the model picks her keepers:
+
+```bash
+shotsort match --project "My Shoot" \
+  --raw-src /Volumes/Picture/Organized \   # RAW archive root; scanned across all days
+  --out     ~/Deliveries/my-shoot-selects    # keeper RAWs land here
+```
+
+It reads PixCake's own project database to learn which previews are **kept** (a
+photo "removed" in PixCake only leaves the project — the file stays on disk, so
+the folder can't tell you), then finds each keeper's RAW by an **exact capture-time
+match**: EXIF `DateTimeOriginal` **plus `SubSecTimeOriginal`**, to the millisecond.
+The camera writes the same value to a shot's JPEG and its RAW, so the pairing is
+unique even inside a 30fps burst — sequence numbers, which drift between the two
+naming schemes, are never used.
+
+Matched RAWs are **copied** by default (`--action move` to pull them out of the
+archive, `--action link` for symlinks); unmatched or ambiguous keepers are listed,
+never guessed. The gather is journalled, so `shotsort undo --journal
+<out>/.shotsort-journal.jsonl` reverses it. macOS + PixCake only; add `--dry-run`
+to preview.
+
 ## Options
 
 | Option | Default | Meaning |

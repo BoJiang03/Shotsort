@@ -56,6 +56,16 @@ pub struct CaptureInfo {
     pub model: Option<String>,
 }
 
+/// A capture instant precise to the millisecond: EXIF `DateTimeOriginal` plus
+/// `SubSecTimeOriginal`. The camera writes an identical value to a shot's RAW and
+/// to the JPEG it generates, so two files with the same `CaptureKey` are the same
+/// exposure — precise enough to separate frames of a 30fps burst (~33 ms apart).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CaptureKey {
+    pub dt: NaiveDateTime,
+    pub subsec_ms: u16,
+}
+
 /// Where a planned date ultimately came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DateProvenance {

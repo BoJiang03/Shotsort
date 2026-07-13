@@ -5,13 +5,13 @@
 //! easily-read capture date and fall back to mtime per the date-source policy.
 
 use std::fs::File;
-use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::io::{BufReader, Cursor, Read, Seek, SeekFrom};
 use std::path::Path;
 
 use chrono::{DateTime, FixedOffset, Local, NaiveDateTime};
 use exif::{In, Tag, Value};
 
-use crate::types::{CaptureInfo, FileKind};
+use crate::types::{CaptureInfo, CaptureKey, FileKind};
 
 /// Seconds between the 1904-01-01 (QuickTime/MP4) and 1970-01-01 (Unix) epochs.
 const MAC_TO_UNIX_EPOCH: i64 = 2_082_844_800;
@@ -31,19 +31,78 @@ pub fn extract(path: &Path, kind: FileKind, tz_offset: Option<FixedOffset>) -> C
 }
 
 fn exif_capture(path: &Path) -> Option<CaptureInfo> {
-    let file = File::open(path).ok()?;
-    let mut reader = BufReader::new(file);
-    let exif = exif::Reader::new().read_from_container(&mut reader).ok()?;
-
-    let datetime = parse_exif_dt(&exif, Tag::DateTimeOriginal)
-        .or_else(|| parse_exif_dt(&exif, Tag::DateTimeDigitized))
-        .or_else(|| parse_exif_dt(&exif, Tag::DateTime));
-
+    let exif = read_exif(path, has_datetime)?;
     Some(CaptureInfo {
-        datetime,
+        datetime: capture_dt(&exif),
         make: get_ascii(&exif, Tag::Make),
         model: get_ascii(&exif, Tag::Model),
     })
+}
+
+/// Read a millisecond-precise [`CaptureKey`] (`DateTimeOriginal` +
+/// `SubSecTimeOriginal`) from an image's EXIF. Used by `shotsort match` to pair a
+/// PixCake preview JPEG with its RAW: both carry the same value, so equal keys
+/// mean the same shot. Returns `None` if the file has no usable EXIF datetime.
+pub fn exif_capture_key(path: &Path) -> Option<CaptureKey> {
+    let exif = read_exif(path, has_datetime)?;
+    let dt = capture_dt(&exif)?;
+    let subsec_ms = get_ascii(&exif, Tag::SubSecTimeOriginal)
+        .as_deref()
+        .map(parse_subsec_ms)
+        .unwrap_or(0);
+    Some(CaptureKey { dt, subsec_ms })
+}
+
+/// Read EXIF, reading only a bounded **header prefix** when it suffices.
+/// `kamadak-exif` reads the *entire* file for TIFF-based RAW (Sony ARW is one), so
+/// naively scanning an archive drags every RAW's pixel data off the card. The
+/// capture tags all live in the first tens of KB, so we parse a 256 KB prefix and
+/// accept it only if `want` is satisfied (e.g. a datetime is present); otherwise
+/// we fall back to the full container for the rare file whose tags sit further in.
+fn read_exif(path: &Path, want: impl Fn(&exif::Exif) -> bool) -> Option<exif::Exif> {
+    const PREFIX: u64 = 256 * 1024;
+    if let Ok(mut f) = File::open(path) {
+        let mut buf = Vec::new();
+        if (&mut f).take(PREFIX).read_to_end(&mut buf).is_ok()
+            && let Ok(exif) = exif::Reader::new().read_from_container(&mut Cursor::new(&buf))
+            && want(&exif)
+        {
+            return Some(exif);
+        }
+    }
+    let file = File::open(path).ok()?;
+    let mut reader = BufReader::new(file);
+    exif::Reader::new().read_from_container(&mut reader).ok()
+}
+
+fn capture_dt(exif: &exif::Exif) -> Option<NaiveDateTime> {
+    parse_exif_dt(exif, Tag::DateTimeOriginal)
+        .or_else(|| parse_exif_dt(exif, Tag::DateTimeDigitized))
+        .or_else(|| parse_exif_dt(exif, Tag::DateTime))
+}
+
+fn has_datetime(exif: &exif::Exif) -> bool {
+    capture_dt(exif).is_some()
+}
+
+/// Normalize an EXIF SubSec string (a fraction of a second, most-significant
+/// digit first) to whole milliseconds: `"851"` → 851, `"85"` → 850, `"8"` → 800,
+/// `"8510"` → 851 (excess digits dropped). A blank/garbage value yields 0.
+fn parse_subsec_ms(s: &str) -> u16 {
+    let digits: String = s
+        .trim()
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .take(3)
+        .collect();
+    if digits.is_empty() {
+        return 0;
+    }
+    let mut v: u16 = digits.parse().unwrap_or(0);
+    for _ in digits.len()..3 {
+        v = v.saturating_mul(10); // pad centi-/deci-seconds out to milliseconds
+    }
+    v
 }
 
 fn parse_exif_dt(exif: &exif::Exif, tag: Tag) -> Option<NaiveDateTime> {
@@ -161,4 +220,21 @@ fn read_mvhd_time(file: &mut File, body_start: u64) -> Option<i64> {
         return None; // unset creation time
     }
     Some(raw_secs as i64 - MAC_TO_UNIX_EPOCH)
+}
+
+#[cfg(test)]
+mod subsec_tests {
+    use super::parse_subsec_ms;
+
+    #[test]
+    fn subsec_normalizes_to_milliseconds() {
+        assert_eq!(parse_subsec_ms("851"), 851); // already ms
+        assert_eq!(parse_subsec_ms("221"), 221);
+        assert_eq!(parse_subsec_ms("85"), 850); // centiseconds -> ms
+        assert_eq!(parse_subsec_ms("8"), 800); // deciseconds -> ms
+        assert_eq!(parse_subsec_ms("8510"), 851); // excess digits dropped
+        assert_eq!(parse_subsec_ms(""), 0);
+        assert_eq!(parse_subsec_ms("  "), 0);
+        assert_eq!(parse_subsec_ms("12 "), 120); // trailing junk after digits
+    }
 }

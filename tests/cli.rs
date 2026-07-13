@@ -239,7 +239,14 @@ fn video_link_mode_makes_relative_symlinks() {
         .arg(card.path())
         .args(["--dest"])
         .arg(&dest)
-        .args(["--mode", "video", "--link", "--date-source", "mtime", "--yes"])
+        .args([
+            "--mode",
+            "video",
+            "--link",
+            "--date-source",
+            "mtime",
+            "--yes",
+        ])
         .status()
         .unwrap();
     assert!(status.success());
@@ -250,7 +257,10 @@ fn video_link_mode_makes_relative_symlinks() {
     assert!(meta.file_type().is_symlink(), "expected a symlink");
     // ...with a RELATIVE target (survives the card being renamed)...
     let target = fs::read_link(&link).unwrap();
-    assert!(target.is_relative(), "link target must be relative: {target:?}");
+    assert!(
+        target.is_relative(),
+        "link target must be relative: {target:?}"
+    );
     // ...that resolves to the original clip's bytes.
     assert_eq!(fs::read(&link).unwrap(), b"clip-five");
     // Original untouched.
@@ -316,6 +326,173 @@ fn counter_names_by_shot_order_and_continues_across_runs() {
     // Files from the first run keep their original numbers (never renamed).
     assert_eq!(fs::read_to_string(day.join("0000.JPG")).unwrap(), "A");
     assert_eq!(fs::read_to_string(day.join("0002.JPG")).unwrap(), "C");
+}
+
+/// Write a minimal JPEG carrying EXIF `DateTimeOriginal` + `SubSecTimeOriginal`,
+/// enough for the matcher to read a millisecond capture key. `dt` is a 19-char
+/// `"YYYY:MM:DD HH:MM:SS"`; `subsec` is up to 3 digits. Used for both the `.JPG`
+/// previews and the `.ARW` archive files (kamadak-exif sniffs the JPEG content,
+/// so the `.ARW` extension only affects shotsort's kind classification).
+fn write_exif_image(path: &Path, dt: &str, subsec: &str) {
+    assert_eq!(dt.len(), 19, "datetime must be YYYY:MM:DD HH:MM:SS");
+    let subsec_bytes = subsec.as_bytes();
+    let subsec_count = (subsec_bytes.len() + 1) as u32; // includes NUL
+    assert!(
+        subsec_count <= 4,
+        "test helper only inlines short subsec values"
+    );
+
+    // TIFF (little-endian): header -> IFD0 (ExifIFD pointer) -> ExifIFD (two
+    // ASCII tags) -> data area (the datetime string). Offsets are fixed by the
+    // constant entry counts below.
+    let exif_ifd_off: u32 = 26;
+    let dt_off: u32 = 56;
+    let mut tiff: Vec<u8> = Vec::new();
+    tiff.extend_from_slice(b"II");
+    tiff.extend_from_slice(&0x2Au16.to_le_bytes());
+    tiff.extend_from_slice(&8u32.to_le_bytes()); // IFD0 at offset 8
+
+    tiff.extend_from_slice(&1u16.to_le_bytes()); // IFD0: 1 entry
+    tiff.extend_from_slice(&0x8769u16.to_le_bytes()); // ExifIFD pointer
+    tiff.extend_from_slice(&4u16.to_le_bytes()); // LONG
+    tiff.extend_from_slice(&1u32.to_le_bytes());
+    tiff.extend_from_slice(&exif_ifd_off.to_le_bytes());
+    tiff.extend_from_slice(&0u32.to_le_bytes()); // no next IFD
+
+    tiff.extend_from_slice(&2u16.to_le_bytes()); // ExifIFD: 2 entries
+    tiff.extend_from_slice(&0x9003u16.to_le_bytes()); // DateTimeOriginal
+    tiff.extend_from_slice(&2u16.to_le_bytes()); // ASCII
+    tiff.extend_from_slice(&20u32.to_le_bytes());
+    tiff.extend_from_slice(&dt_off.to_le_bytes());
+    tiff.extend_from_slice(&0x9291u16.to_le_bytes()); // SubSecTimeOriginal
+    tiff.extend_from_slice(&2u16.to_le_bytes()); // ASCII
+    tiff.extend_from_slice(&subsec_count.to_le_bytes());
+    let mut inline = [0u8; 4];
+    inline[..subsec_bytes.len()].copy_from_slice(subsec_bytes);
+    tiff.extend_from_slice(&inline);
+    tiff.extend_from_slice(&0u32.to_le_bytes()); // no next IFD
+
+    assert_eq!(tiff.len() as u32, dt_off);
+    tiff.extend_from_slice(dt.as_bytes());
+    tiff.push(0); // NUL-terminate -> 20 bytes
+
+    let mut jpeg: Vec<u8> = vec![0xFF, 0xD8, 0xFF, 0xE1];
+    let app1_len = (2 + 6 + tiff.len()) as u16;
+    jpeg.extend_from_slice(&app1_len.to_be_bytes());
+    jpeg.extend_from_slice(b"Exif\0\0");
+    jpeg.extend_from_slice(&tiff);
+    jpeg.extend_from_slice(&[0xFF, 0xD9]);
+
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, jpeg).unwrap();
+}
+
+/// Build a throwaway PixCake data dir: `base.db` (name → project) plus a project
+/// `thumbnail` table. `rows` are `(preview path, inRecycleBin)`.
+fn build_pixcake_db(pixdata: &Path, project: &str, rows: &[(PathBuf, i64)]) {
+    let proj = pixdata.join("db/user_1/project_1");
+    fs::create_dir_all(&proj).unwrap();
+    let conn = rusqlite::Connection::open(proj.join("project.db")).unwrap();
+    conn.execute(
+        "CREATE TABLE thumbnail(originalImagePath TEXT, inRecycleBin INT, isValid INT, captureTime INTEGER)",
+        [],
+    )
+    .unwrap();
+    for (p, bin) in rows {
+        conn.execute(
+            "INSERT INTO thumbnail VALUES (?1, ?2, 1, 0)",
+            rusqlite::params![p.to_str().unwrap(), bin],
+        )
+        .unwrap();
+    }
+    drop(conn);
+
+    let conn = rusqlite::Connection::open(pixdata.join("db/base.db")).unwrap();
+    conn.execute(
+        "CREATE TABLE project_operation_log(id INTEGER PRIMARY KEY AUTOINCREMENT, \
+         userId INTEGER, projectId INTEGER, name TEXT, type INTEGER, source INTEGER, time INTEGER)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO project_operation_log(userId,projectId,name,type,source,time) \
+         VALUES (1,1,?1,1,0,1783953000000)",
+        [project],
+    )
+    .unwrap();
+}
+
+#[test]
+fn match_pairs_keepers_to_raws_by_subsecond() {
+    let card = TempCard::new("match");
+    let root = card.path();
+    let archive = root.join("Organized/2026/2026-07-13");
+    let previews = root.join("previews");
+    let pixdata = root.join("pix");
+    let out = root.join("Selects");
+
+    // Archive RAWs: a same-second burst (A,B differ only in sub-second) + a later
+    // frame (C). A wrong second-only match could grab A instead of B.
+    write_exif_image(&archive.join("A.ARW"), "2026:07:13 17:00:00", "110");
+    write_exif_image(&archive.join("B.ARW"), "2026:07:13 17:00:00", "451");
+    write_exif_image(&archive.join("C.ARW"), "2026:07:13 17:00:05", "000");
+
+    // Preview JPEGs: two kept (pointing at B and C by sub-second) + one removed
+    // (which would map to A) to prove recycle-bin rows are excluded.
+    write_exif_image(
+        &previews.join("shot_0002.JPG"),
+        "2026:07:13 17:00:00",
+        "451",
+    );
+    write_exif_image(
+        &previews.join("shot_0009.JPG"),
+        "2026:07:13 17:00:05",
+        "000",
+    );
+    write_exif_image(
+        &previews.join("shot_0001.JPG"),
+        "2026:07:13 17:00:00",
+        "110",
+    );
+
+    build_pixcake_db(
+        &pixdata,
+        "SHOOT",
+        &[
+            (previews.join("shot_0002.JPG"), 0),
+            (previews.join("shot_0009.JPG"), 0),
+            (previews.join("shot_0001.JPG"), 1), // removed -> excluded
+        ],
+    );
+
+    let status = bin()
+        .args(["match", "--project", "SHOOT", "--pixcake-dir"])
+        .arg(&pixdata)
+        .arg("--raw-src")
+        .arg(root.join("Organized"))
+        .arg("--out")
+        .arg(&out)
+        .arg("--yes")
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    // Sub-second picked B (not A) for the 17:00:00 keeper, and C for the later one.
+    assert!(out.join("B.ARW").exists(), "expected B (subsec match)");
+    assert!(out.join("C.ARW").exists());
+    // A's shot was removed from the project, so its RAW is NOT gathered.
+    assert!(
+        !out.join("A.ARW").exists(),
+        "A belonged to a removed keeper"
+    );
+    // Copy, not move: originals remain in the archive.
+    assert!(archive.join("A.ARW").exists());
+    assert!(archive.join("B.ARW").exists());
+
+    // Journal records two copies, so undo can reverse the gather.
+    let journal = out.join(".shotsort-journal.jsonl");
+    let lines = fs::read_to_string(&journal).unwrap();
+    assert_eq!(lines.lines().filter(|l| l.contains("\"copy\"")).count(), 2);
 }
 
 #[test]

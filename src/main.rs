@@ -7,6 +7,8 @@ mod engine;
 mod filetype;
 mod guard;
 mod journal;
+mod matchcmd;
+mod pixcake;
 mod plan;
 mod report;
 mod scan;
@@ -44,21 +46,42 @@ fn main() {
 
 /// Returns the process exit code (0 = clean, non-zero = errors occurred).
 fn run(cli: Cli) -> Result<i32> {
-    if let Some(Command::Undo { journal, yes }) = &cli.command {
-        let summary = undo::run(journal, *yes, cli.quiet)?;
-        if !summary.reverse_journal.as_os_str().is_empty() {
-            println!(
-                "Undo complete: restored {}, skipped {}, errors {}.\n  reverse journal: {}",
-                summary.restored,
-                summary.skipped,
-                summary.errors,
-                summary.reverse_journal.display()
-            );
+    match &cli.command {
+        Some(Command::Undo { journal, yes }) => {
+            let summary = undo::run(journal, *yes, cli.quiet)?;
+            if !summary.reverse_journal.as_os_str().is_empty() {
+                println!(
+                    "Undo complete: restored {}, skipped {}, errors {}.\n  reverse journal: {}",
+                    summary.restored,
+                    summary.skipped,
+                    summary.errors,
+                    summary.reverse_journal.display()
+                );
+            }
+            Ok(if summary.errors > 0 { 1 } else { 0 })
         }
-        return Ok(if summary.errors > 0 { 1 } else { 0 });
+        Some(Command::Match {
+            project,
+            raw_src,
+            out,
+            pixcake_dir,
+            action,
+            dry_run,
+            journal,
+            yes,
+        }) => matchcmd::run(matchcmd::MatchArgs {
+            project: project.clone(),
+            raw_src: raw_src.clone(),
+            out: out.clone(),
+            pixcake_dir: pixcake_dir.clone(),
+            action: *action,
+            dry_run: *dry_run,
+            journal: journal.clone(),
+            yes: *yes,
+            quiet: cli.quiet,
+        }),
+        None => organize(cli),
     }
-
-    organize(cli)
 }
 
 fn organize(cli: Cli) -> Result<i32> {
