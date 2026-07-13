@@ -75,7 +75,12 @@ The pipeline is `scan → plan → execute`, with one resolved config threaded t
      media extension (`IMG.ARW.xmp` → groups with `IMG`).
    - Resolve each group's date via the `--date-source` policy, then
      `--on-missing-date` (skip / mtime / `NoDate/`).
-   - Assign a per-folder chronological `{counter}`.
+   - Assign a per-folder chronological `{counter}` (0-based, numbered by
+     capture order). It is seeded past the highest counter-named file already in
+     the dest folder (`plan::existing_counter_max`), so incremental re-runs
+     *continue* the sequence (`…0005, 0006`) instead of restarting at `0000` and
+     colliding — this is what makes `name_template = "{counter:04}"` safe for the
+     shoot-a-batch-then-run-again workflow.
    - Emit per-file `PlanItem`s, resolving dedup + conflicts against both existing
      files on disk and an in-plan "claimed" set. On-disk collisions obey
      `--dedup`; in-plan name clashes (two distinct sources, same target name)

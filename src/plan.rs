@@ -35,7 +35,7 @@ struct Group {
 pub fn build(files: Vec<MediaFile>, cfg: &RunConfig) -> Vec<PlanItem> {
     let groups = group_files(files, cfg);
     let mut groups = assign_dates(groups, cfg);
-    assign_counters(&mut groups);
+    assign_counters(&mut groups, cfg);
     emit_items(groups, cfg)
 }
 
@@ -214,7 +214,18 @@ fn render_folder(
 }
 
 /// Assign a per-folder chronological counter (used by `{counter}` templates).
-fn assign_counters(groups: &mut [Group]) {
+///
+/// Numbering is **0-based per destination folder** and **continues across
+/// runs**: each folder is seeded past the highest counter already present on
+/// disk, so a second run of the same day appends (`0005`, `0006`, …) instead of
+/// restarting at `0000` and colliding with the files a previous run placed.
+/// Groups sharing a folder share one sequence; a RAW+JPEG pair shares a single
+/// counter (one number per shot, not per file).
+fn assign_counters(groups: &mut [Group], cfg: &RunConfig) {
+    // The seed requires one `read_dir` per folder; skip it entirely when no
+    // template can consume the counter.
+    let uses_counter = cfg.name_template.contains("{counter");
+
     let mut order: Vec<usize> = (0..groups.len()).collect();
     order.sort_by(|&a, &b| {
         groups[a]
@@ -228,11 +239,41 @@ fn assign_counters(groups: &mut [Group]) {
     for idx in order {
         if groups[idx].folder != current_folder {
             current_folder = groups[idx].folder.clone();
-            n = 0;
+            // Continue past counter-named files already in this dest folder so
+            // re-runs append instead of colliding; start fresh at 0 otherwise.
+            n = if uses_counter {
+                existing_counter_max(&cfg.dest, &current_folder)
+                    .map(|m| m + 1)
+                    .unwrap_or(0)
+            } else {
+                0
+            };
         }
-        n += 1;
         groups[idx].counter = n;
+        n += 1;
     }
+}
+
+/// Highest `{counter}` value already living in `dest/folder`, if the folder
+/// exists. Reads the leading run of ASCII digits of each file's stem (so
+/// `0007.ARW` → 7, and a conflict-renamed `0007_001.ARW` → 7), ignoring names
+/// that do not begin with a digit. Returns `None` for a missing/empty folder.
+fn existing_counter_max(dest: &Path, folder: &str) -> Option<u32> {
+    let mut dir = dest.to_path_buf();
+    for part in folder.split('/').filter(|s| !s.is_empty()) {
+        dir.push(part);
+    }
+    let mut max: Option<u32> = None;
+    for entry in std::fs::read_dir(&dir).ok()?.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let stem = name.split('.').next().unwrap_or(name);
+        let digits: String = stem.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if let Ok(v) = digits.parse::<u32>() {
+            max = Some(max.map_or(v, |m| m.max(v)));
+        }
+    }
+    max
 }
 
 /// Expand groups into per-file plan items, resolving dedup/conflicts.

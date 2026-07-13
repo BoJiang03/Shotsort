@@ -271,6 +271,54 @@ fn video_link_mode_makes_relative_symlinks() {
 }
 
 #[test]
+fn counter_names_by_shot_order_and_continues_across_runs() {
+    let card = TempCard::new("counter");
+    let dcim = card.path().join("DCIM");
+    let dest = card.path().join("Organized");
+    let day = dest.join("2026/2026-06-15");
+
+    // Three shots on one day, in ascending capture (mtime) order.
+    write(&dcim.join("100MSDCF/DSC00001.JPG"), "A", "202606150901.00");
+    write(&dcim.join("100MSDCF/DSC00002.JPG"), "B", "202606150902.00");
+    write(&dcim.join("100MSDCF/DSC00003.JPG"), "C", "202606150903.00");
+
+    let run = |src: &Path| {
+        let status = bin()
+            .arg(src)
+            .args(["--dest"])
+            .arg(&dest)
+            .args([
+                "--date-source",
+                "mtime",
+                "--name-template",
+                "{counter:04}",
+                "--yes",
+            ])
+            .status()
+            .unwrap();
+        assert!(status.success());
+    };
+    run(&dcim);
+
+    // 0-based, numbered by shooting order within the date folder.
+    assert_eq!(fs::read_to_string(day.join("0000.JPG")).unwrap(), "A");
+    assert_eq!(fs::read_to_string(day.join("0001.JPG")).unwrap(), "B");
+    assert_eq!(fs::read_to_string(day.join("0002.JPG")).unwrap(), "C");
+
+    // A second batch shot later the same day, run separately...
+    write(&dcim.join("100MSDCF/DSC00004.JPG"), "D", "202606150904.00");
+    write(&dcim.join("100MSDCF/DSC00005.JPG"), "E", "202606150905.00");
+    run(&dcim);
+
+    // ...continues the sequence instead of restarting at 0000 and colliding.
+    assert_eq!(fs::read_to_string(day.join("0003.JPG")).unwrap(), "D");
+    assert_eq!(fs::read_to_string(day.join("0004.JPG")).unwrap(), "E");
+    // Files from the first run keep their original numbers (never renamed).
+    assert_eq!(fs::read_to_string(day.join("0000.JPG")).unwrap(), "A");
+    assert_eq!(fs::read_to_string(day.join("0002.JPG")).unwrap(), "C");
+}
+
+#[test]
 fn dry_run_moves_nothing() {
     let card = TempCard::new("dry");
     let dcim = card.path().join("DCIM");

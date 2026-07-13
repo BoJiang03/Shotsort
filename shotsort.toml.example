@@ -17,6 +17,11 @@ dest             = "/Volumes/SONY/Organized"
 types            = ["raw", "jpeg", "video"]
 
 # Destination sub-folder and file-name templates.
+# name_template supports {counter} — a per-date-folder sequence numbered by
+# capture order. {counter:04} = pure 4-digit names (0000.ARW, 0001.ARW, ...);
+# it is 0-based and CONTINUES across runs (a later batch appends 0005, 0006, ...
+# rather than restarting), so re-running the same day never collides. A RAW+JPEG
+# pair shares one number. The default {original} keeps the camera's filenames.
 folder_template  = "{YYYY}/{YYYY}-{MM}-{DD}"
 name_template    = "{original}"
 
