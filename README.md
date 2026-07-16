@@ -51,7 +51,7 @@ If you want a copy on your computer instead of an in-card move, use `--copy`.
 Requires a Rust toolchain (`rustup`).
 
 ```bash
-git clone <your-repo-url> shotsort
+git clone https://github.com/BoJiang03/Shotsort.git shotsort
 cd shotsort
 cargo build --release
 # binary at target/release/shotsort

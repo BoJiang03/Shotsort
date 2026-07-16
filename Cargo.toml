@@ -7,7 +7,7 @@ license = "MIT"
 readme = "README.md"
 keywords = ["photography", "exif", "sd-card", "dcim", "organizer"]
 categories = ["command-line-utilities", "filesystem"]
-repository = "https://github.com/BoJiang03/shotsort"
+repository = "https://github.com/BoJiang03/Shotsort"
 
 [profile.release]
 lto = true
